@@ -117,7 +117,7 @@
 
     function updateDistanceStatus(distanceMeters) {
         if (!Number.isFinite(distanceMeters)) {
-            distanceStatus.textContent = 'Distance: No face detected';
+            distanceStatus.textContent = 'Checking distance…';
             distanceStatus.classList.remove('distance-ok', 'distance-bad');
             setReadyState(false);
             return;
@@ -182,37 +182,80 @@
             ctx = canvas.getContext('2d');
 
             // Setup MediaPipe Face Mesh
-            if (!faceMesh && window.FaceMesh) {
-                faceMesh = new FaceMesh({
-                    locateFile: (file) => {
-                        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-                    }
-                });
-
-                faceMesh.setOptions({
-                    maxNumFaces: 1,
-                    refineLandmarks: true,
-                    minDetectionConfidence: 0.5,
-                    minTrackingConfidence: 0.5
-                });
-
-                faceMesh.onResults(onResults);
-
-                // Start camera
-                camera = new Camera(video, {
-                    onFrame: async () => {
-                        if (faceMesh) {
-                            await faceMesh.send({ image: video });
+            if (!faceMesh) {
+                if (window.FaceMesh && window.Camera) {
+                    initializeFaceMesh();
+                } else {
+                    // Wait for MediaPipe libraries to load
+                    let retryCount = 0;
+                    const maxRetries = 10;
+                    const checkFaceMesh = setInterval(() => {
+                        retryCount++;
+                        if (window.FaceMesh && window.Camera) {
+                            clearInterval(checkFaceMesh);
+                            initializeFaceMesh();
+                        } else if (retryCount >= maxRetries) {
+                            clearInterval(checkFaceMesh);
+                            warningEl.textContent = 'Face detection model failed to load. Please refresh the page.';
                         }
-                    },
-                    width: 640,
-                    height: 480
-                });
-
-                camera.start();
+                    }, 500);
+                }
+            } else {
+                // FaceMesh already exists, just create camera
+                if (!camera && window.Camera && streamActive) {
+                    camera = new Camera(video, {
+                        onFrame: async () => {
+                            if (faceMesh) {
+                                await faceMesh.send({ image: video });
+                            }
+                        },
+                        width: 640,
+                        height: 480
+                    });
+                    camera.start();
+                }
             }
         } catch (e) {
             warningEl.textContent = 'Unable to access camera. Please grant permission in your browser.';
+            console.error('Camera error:', e);
+        }
+    }
+
+    function initializeFaceMesh() {
+        if (faceMesh || !window.FaceMesh || !window.Camera) {
+            return;
+        }
+
+        faceMesh = new FaceMesh({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+            }
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+
+        // Start camera
+        camera = new Camera(video, {
+            onFrame: async () => {
+                if (faceMesh) {
+                    await faceMesh.send({ image: video });
+                }
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start();
+        
+        if (warningEl.textContent.includes('loading')) {
+            warningEl.textContent = '';
         }
     }
 
@@ -302,7 +345,6 @@
             }
         } catch (e) {
             // Drawing visualization not available - continue without it
-            console.log('Drawing visualization not available:', e);
         }
 
         // Calculate distance between eyes and camera
@@ -330,10 +372,13 @@
 
     // Try to auto-start camera on page load
     window.addEventListener('load', () => {
-        enableCamera();
-        if (startBtn) {
-            startBtn.disabled = false;
-        }
+        // Wait a bit for MediaPipe to fully load
+        setTimeout(() => {
+            enableCamera();
+            if (startBtn) {
+                startBtn.disabled = false;
+            }
+        }, 1000);
     });
 
     function startTest() {
